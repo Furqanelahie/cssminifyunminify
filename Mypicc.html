@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<meta charset="utf-8">
+	<meta http-equiv="X-UA-Compatible" content="IE=edge">
+	<title>Leaflet.AccuratePosition example</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+	<!-- Leaflet -->
+	<link rel="stylesheet" href="http://cdn.leafletjs.com/leaflet-0.7.3/leaflet.css">
+	<script src="http://cdn.leafletjs.com/leaflet-0.7.3/leaflet.js"></script>
+
+	<!-- Accurate Position Plugin -->
+	<style>
+	  html, body, .container {
+	height: 100%;
+}
+
+body {
+	padding: 0;
+	margin: 0;
+}
+
+#map {
+	height: 33%;
+}
+
+#status {
+	margin: 0;
+	padding: 0;
+	width: 100%;
+	height: 67%;
+	font-family: sans-serif;
+	font-weight: lighter;
+	font-size: 15px;
+	list-style: none;
+	overflow: auto;
+	overflow-x: hidden;
+}
+
+#status li {
+	box-sizing: border-box;
+	padding: 10px 50px 10px 15px;
+	display: block;
+	width: 100%;
+	min-height: 40px;
+	color: #000000;
+	line-height: 20px;
+	text-decoration: none;
+	border-bottom: solid 1px #ccc;
+}
+
+#status.progressing li:last-child {
+	background-image: url(progress.gif);
+	background-size: 20px 20px;
+	background-repeat: no-repeat;
+	background-position: right 15px center;
+}
+
+#status.done li:last-child {
+	font-weight: bold;
+}
+
+#status.error li:last-child {
+	font-weight: bold;
+	color: red;
+}
+	</style>
+</head>
+<body>
+  <input id="input"/>
+  <input id="input2"/>
+	<script>
+	  
+	  /**
+ * Leaflet.AccuratePosition aims to provide an accurate device location when simply calling map.locate() doesn’t.
+ * https://github.com/m165437/Leaflet.AccuratePosition
+ *
+ * Greg Wilson's getAccurateCurrentPosition() forked to be a Leaflet plugin
+ * https://github.com/gwilson/getAccurateCurrentPosition
+ *
+ * Copyright (C) 2013 Greg Wilson, 2014 Michael Schmidt-Voigt
+ */
+
+L.Map.include({
+	_defaultAccuratePositionOptions: {
+		maxWait: 10000,
+		desiredAccuracy: 20
+	},
+
+	findAccuratePosition: function (options) {
+
+		if (!navigator.geolocation) {
+			this._handleAccuratePositionError({
+				code: 0,
+				message: 'Geolocation not supported.'
+			});
+			return this;
+		}
+
+		this._accuratePositionEventCount = 0;
+		this._accuratePositionOptions = L.extend(this._defaultAccuratePositionOptions, options);
+		this._accuratePositionOptions.enableHighAccuracy = true;
+		this._accuratePositionOptions.maximumAge = 0;
+		
+		if (!this._accuratePositionOptions.timeout)
+			this._accuratePositionOptions.timeout = this._accuratePositionOptions.maxWait;
+
+		var onResponse = L.bind(this._checkAccuratePosition, this),
+			onError = L.bind(this._handleAccuratePositionError, this),
+			onTimeout = L.bind(this._handleAccuratePositionTimeout, this);
+
+		this._accuratePositionWatchId = navigator.geolocation.watchPosition(
+			onResponse,
+			onError,
+			this._accuratePositionOptions);
+
+		this._accuratePositionTimerId = setTimeout(
+			onTimeout,
+			this._accuratePositionOptions.maxWait);
+	},
+
+	_handleAccuratePositionTimeout: function() {
+		navigator.geolocation.clearWatch(this._accuratePositionWatchId);
+
+		if (typeof this._lastCheckedAccuratePosition !== 'undefined') {
+			this._handleAccuratePositionResponse(this._lastCheckedAccuratePosition);
+		} else {
+			this._handleAccuratePositionError({
+				code: 3,
+				message: 'Timeout expired'
+			});
+		}
+
+		return this;
+	},
+
+	_cleanUpAccuratePositioning: function () {
+		clearTimeout(this._accuratePositionTimerId);
+		navigator.geolocation.clearWatch(this._accuratePositionWatchId);
+	},
+
+	_checkAccuratePosition: function (pos) {
+		var accuracyReached = pos.coords.accuracy <= this._accuratePositionOptions.desiredAccuracy;
+
+		this._lastCheckedAccuratePosition = pos;
+		this._accuratePositionEventCount = this._accuratePositionEventCount + 1;
+
+		if (accuracyReached && (this._accuratePositionEventCount > 1)) {
+			this._cleanUpAccuratePositioning();
+			this._handleAccuratePositionResponse(pos);
+		} else {
+			this._handleAccuratePositionProgress(pos);
+		}
+	},
+
+	_prepareAccuratePositionData: function (pos) {
+		var lat = pos.coords.latitude;
+			lng = pos.coords.longitude;
+			input.value=lat
+			input2.value=lng
+			latlng = new L.LatLng(lat, lng),
+			latAccuracy = 180 * pos.coords.accuracy / 40075017,
+			lngAccuracy = latAccuracy / Math.cos(Math.PI / 180 * lat),
+
+			bounds = L.latLngBounds(
+				[lat - latAccuracy, lng - lngAccuracy],
+				[lat + latAccuracy, lng + lngAccuracy]);
+
+		var data = {
+			latlng: latlng,
+			bounds: bounds,
+			timestamp: pos.timestamp
+		};
+
+		for (var i in pos.coords) {
+			if (typeof pos.coords[i] === 'number') {
+				data[i] = pos.coords[i];
+			}
+		}
+
+		return data;
+	},
+
+	_handleAccuratePositionProgress: function (pos) {
+		var data = this._prepareAccuratePositionData(pos);
+		this.fire('accuratepositionprogress', data);
+	},
+
+	_handleAccuratePositionResponse: function (pos) {
+		var data = this._prepareAccuratePositionData(pos);
+		this.fire('accuratepositionfound', data);
+	},
+
+	_handleAccuratePositionError: function (error) {
+		var c = error.code,
+			message = error.message ||
+				(c === 1 ? 'permission denied' :
+				(c === 2 ? 'position unavailable' : 'timeout'));
+
+		this._cleanUpAccuratePositioning();
+
+		this.fire('accuratepositionerror', {
+			code: c,
+			message: 'Geolocation error: ' + message + '.'
+		});
+	}
+});
+
+	</script>
+	<div id="map"></div>
+	<ul id="status" class="progressing">
+		<li>Find accurate position … (Desired accuracy: 20)</li>
+	</ul>
+
+	<script>
+		var map = L.map('map').setView([40.44695, -345.23437], 1);
+
+		L.tileLayer('http://{s}.tile.osm.org/{z}/{x}/{y}.png', {
+			attribution: '&copy; <a href="http://osm.org/copyright">OpenStreetMap</a> contributors'
+		}).addTo(map);
+
+		function onAccuratePositionError (e) {
+			addStatus(e.message, 'error');
+		}
+
+		function onAccuratePositionProgress (e) {
+			var message = 'Progressing … (Accuracy: ' + e.accuracy + ')';
+			addStatus(message, 'progressing');
+		}
+
+		function onAccuratePositionFound (e) {
+			var message = 'Most accurate position found (Accuracy: ' + e.accuracy + ')';
+			addStatus(message, 'done');
+			map.setView(e.latlng, 12);
+			L.marker(e.latlng).addTo(map);
+		}
+
+		function addStatus (message, className) {
+			var ul = document.getElementById('status'),
+				li = document.createElement('li');
+			li.appendChild(document.createTextNode(message));
+			ul.className = className;
+			ul.appendChild(li);
+		}
+
+		map.on('accuratepositionprogress', onAccuratePositionProgress);
+		map.on('accuratepositionfound', onAccuratePositionFound);
+		map.on('accuratepositionerror', onAccuratePositionError);
+
+		map.findAccuratePosition({
+			maxWait: 10000,
+			desiredAccuracy: 20000
+		});
+	</script>
+</body>
+</html>
+
